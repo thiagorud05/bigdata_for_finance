@@ -1,0 +1,35 @@
+import pandas as pd
+from sqlalchemy import create_engine, text
+from urllib.parse import quote_plus
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+def create_db_engine():
+    user     = quote_plus(os.getenv('DB_USER', 'postgres'))
+    password = quote_plus(os.getenv('DB_PASS', 'password'))
+    host     = os.getenv('DB_HOST', 'localhost')
+    port     = os.getenv('DB_PORT', '5432')
+    dbname   = os.getenv('DB_NAME', 'data_lake')
+    conn_str = f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{dbname}"
+    return create_engine(conn_str)
+
+engine = create_db_engine()
+print("✓ Engine criada com sucesso.")
+
+
+
+
+
+from sqlalchemy import text
+
+with engine.connect() as conn:
+    # 1. Deleta o schema e TUDO o que houver dentro (tabelas, views, etc)
+    conn.execute(text("DROP SCHEMA IF EXISTS layer_02_silver CASCADE;"))
+    
+    # 2. Recria o schema limpo e vazio
+    conn.execute(text("CREATE SCHEMA layer_02_silver;"))
+    
+    conn.commit()
+    print("✨ Camada Silver resetada! O schema existe, mas está 100% vazio.")
