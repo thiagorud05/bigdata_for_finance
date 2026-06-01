@@ -1,4 +1,3 @@
-# views/explorer.py
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -7,7 +6,6 @@ from config import CORES_FAE
 from database import get_available_datasets, load_table_data, get_list_of_schemas, get_tables_in_schema
 
 def render_explorer_page():
-    # --- SIDEBAR DE NAVEGAÇÃO ---
     with st.sidebar:
         st.subheader("Configuração de Busca")
         
@@ -55,7 +53,6 @@ def render_explorer_page():
             else:
                 st.warning(f"Nenhuma tabela encontrada em {target_schema}.")
 
-    # --- ÁREA PRINCIPAL ---
     st.title(f"🔎 Explorador - {target_schema}")
     
     if selected_table:

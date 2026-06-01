@@ -1,13 +1,17 @@
-# views/balanco_patrimonial.py
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots # <--- NOVO IMPORT NECESSÁRIO
+from plotly.subplots import make_subplots
 from database import get_companies_bp, get_dates_bp, get_bp_data_filtered
-
-# ==============================================================================
-# FUNÇÕES AUXILIARES (UI & FORMATADORES)
-# ==============================================================================
+from chart_theme import (
+    BG_TRANSPARENT, GRID_COLOR, ZERO_LINE_COLOR,
+    FONT_COLOR, FONT_COLOR_TITLE, PALETA, FONT_FAMILY, LEGEND_BG,
+)
+from ai_analyst import (
+    render_ai_panel,
+    build_context_bp,
+    _prompt_bp,
+)
 
 def formatar_moeda_br(valor):
     """
@@ -31,13 +35,8 @@ def style_validation_row(val):
         return 'background-color: #e6fffa; color: #006600; font-weight: bold'
     return ''
 
-# ==============================================================================
-# LÓGICA PRINCIPAL DA PÁGINA
-# ==============================================================================
-
 def render_bp_page():
     
-    # --- 1. SIDEBAR: FILTROS E PARÂMETROS ---
     with st.sidebar:
         st.header("Filtros de Análise")
         
@@ -96,12 +95,10 @@ def render_bp_page():
         }
         divisor = escala_map[scale_option]
 
-    # --- 2. CABEÇALHO DA PÁGINA ---
     nome_empresa = selected_label.split(' (')[0]
     st.title(f"{nome_empresa}")
     st.caption(f"**CNPJ:** {selected_cnpj} | **Análise de Balanço Patrimonial**")
 
-    # --- 3. CARGA E TRANSFORMAÇÃO DE DADOS ---
     with st.spinner(f"Processando dados de {nome_empresa}..."):
         df_raw = get_bp_data_filtered(selected_cnpj, selected_dates, level_selected)
         
@@ -133,7 +130,6 @@ def render_bp_page():
         # Reorganiza colunas finais
         df_pivot = df_pivot[['CD_CONTA', 'DS_CONTA'] + cols_dates]
 
-    # --- 4. CÁLCULOS FINANCEIROS ---
     df_ativo = df_pivot[df_pivot['CD_CONTA'].str.startswith('1')].copy()
     df_passivo = df_pivot[df_pivot['CD_CONTA'].str.startswith('2')].copy()
 
@@ -144,7 +140,6 @@ def render_bp_page():
     total_passivo = get_total(df_passivo, '2')
     diff_check = total_ativo - total_passivo
 
-    # --- CÁLCULO DE CRESCIMENTO (YoY e CAGR) ---
     var_pct = total_ativo.pct_change().fillna(0) # YoY
 
     # CAGR Total
@@ -163,7 +158,6 @@ def render_bp_page():
     row_check = pd.DataFrame([diff_check.tolist()], columns=cols_dates)
     row_check.insert(0, 'DS_CONTA', 'Diferença (Ativo - Passivo)')
 
-    # --- 5. VISUALIZAÇÃO: TABELAS DE DETALHE ---
     
     col_config_dates = {col: st.column_config.TextColumn(col, width="small") for col in cols_dates}
     
@@ -179,7 +173,6 @@ def render_bp_page():
         for c in cols_dates:
             df_view[c] = df_view[c].apply(formatar_moeda_br)
             
-        # --- CÁLCULO MÁGICO DE ALTURA ---
         # 35px por linha de dados + 38px do cabeçalho + 3px de borda/folga
         # Limitamos a 600px para não ficar infinito se tiver 1000 linhas (cria scroll nesse caso)
         altura_dinamica = (len(df_view) + 1) * 35 + 3
@@ -200,12 +193,10 @@ def render_bp_page():
     show_table(df_passivo, "🔴", "Passivo e Patrimônio Líquido")
     st.markdown("###")
 
-    # --- 6. VISUALIZAÇÃO: GRÁFICO AVANÇADO (SUBPLOTS) ---
     st.subheader("✅ Validação e Crescimento")
     
     eixo_x_str = [str(d) for d in cols_dates] 
 
-    # --- CÁLCULO DINÂMICO DE ESCALA (RESPONSIVIDADE) ---
     # 1. Finanças: Pega o maior valor e adiciona 25% de folga para caber os rótulos
     max_valor_fin = max(total_ativo.max(), total_passivo.max())
     range_fin = [-max_valor_fin * 1.25, max_valor_fin * 1.25]
@@ -214,9 +205,7 @@ def render_bp_page():
     max_valor_pct = var_pct.abs().max()
     if pd.isna(max_valor_pct) or max_valor_pct == 0: max_valor_pct = 0.10
     range_pct = [-max_valor_pct * 1.35, max_valor_pct * 1.35]
-    # ---------------------------------------------------
 
-    # --- CRIAÇÃO DO SUBPLOT ---
     fig = make_subplots(
         rows=2, cols=1,
         shared_xaxes=True,
@@ -226,14 +215,13 @@ def render_bp_page():
     )
 
     # Estilo dos Rótulos
-    fonte_rotulos = dict(color='black', size=15, family="Arial")
+    fonte_rotulos = dict(color=FONT_COLOR, size=13, family=FONT_FAMILY)
 
-    # --- ROW 1: BARRAS (ATIVO/PASSIVO) ---
     fig.add_trace(go.Bar(
         x=eixo_x_str,
         y=total_ativo.values,
         name='Ativo Total',
-        marker_color='#2E8B57',
+        marker_color=PALETA[2],
         text=[formatar_moeda_br(v) for v in total_ativo.values], 
         textposition='outside',
         textfont=fonte_rotulos,
@@ -244,83 +232,88 @@ def render_bp_page():
         x=eixo_x_str,
         y=total_passivo.values * -1, 
         name='Passivo + PL',
-        marker_color='#CD5C5C',
+        marker_color=PALETA[7],
         text=[formatar_moeda_br(v) for v in total_passivo.values],
         textposition='outside',
         textfont=fonte_rotulos,
         hovertemplate='Passivo: %{text}<extra></extra>'
     ), row=1, col=1)
 
-    # --- ROW 2: LINHA (CRESCIMENTO) ---
     fig.add_trace(go.Scatter(
         x=eixo_x_str,
         y=var_pct.values,
         name='Crescimento (%)',
         mode='lines+markers+text',
-        line=dict(color='#00008B', width=3),
-        marker=dict(size=8, symbol='circle', color='#00008B'),
+        line=dict(color=PALETA[1], width=3),
+        marker=dict(size=8, symbol='circle', color=PALETA[1],
+                    line=dict(width=1.5, color='rgba(255,255,255,0.3)')),
         text=[f"{v:.1%}" if i > 0 else "" for i, v in enumerate(var_pct.values)], 
         textposition="bottom center",
-        textfont=dict(color='#00008B', size=15, weight='bold'),
+        textfont=dict(color=PALETA[1], size=12, weight='bold'),
         hovertemplate='Crescimento: %{y:.2%}<extra></extra>'
     ), row=2, col=1)
 
-    # --- LAYOUT FINAL ---
     fig.update_layout(
-        # Título Geral
         title=dict(
             text=f"Análise de Evolução | CAGR de Ativo Total do Período Selecionado: {cagr_val:.1%}",
-            font=dict(size=20),
-            x=0.01,   # Alinhado à esquerda
-            y=0.98,   # Bem no topo da área da figura
+            font=dict(size=16, color=FONT_COLOR_TITLE, family=FONT_FAMILY),
+            x=0.01,
+            y=0.98,
             xanchor='left',
             yanchor='top'
         ),
         barmode='relative',
-        plot_bgcolor='white',
-        height=800, # Aumentei altura total para acomodar os espaços
+        plot_bgcolor=BG_TRANSPARENT,
+        paper_bgcolor=BG_TRANSPARENT,
+        height=800,
         showlegend=True,
-        
-        # LEGENDA: POSICIONAMENTO CRÚRGICO
+        font=dict(family=FONT_FAMILY, color=FONT_COLOR),
         legend=dict(
             orientation="h",
             yanchor="bottom",
-            y=0.95,          # Sobe bem a legenda (entra na margem superior)
+            y=0.95,
             xanchor="center",
             x=0.5,
-            bgcolor='rgba(255,255,255,0)',
-            font=dict(color="black", size=12)
+            bgcolor=LEGEND_BG,
+            bordercolor='rgba(255,255,255,0.10)',
+            borderwidth=1,
+            font=dict(color=FONT_COLOR, size=12)
         ),
-        
-        # MARGENS: A chave para não sobrepor
-        # t=160 cria um "cabeçalho" branco gigante onde cabem Título + Legenda + Título do Subplot 1
-        margin=dict(t=160, b=50, l=50, r=50), 
+        margin=dict(t=160, b=50, l=50, r=50),
+        hoverlabel=dict(
+            bgcolor='rgba(15,15,30,0.85)',
+            bordercolor='rgba(255,255,255,0.15)',
+            font=dict(color='#F1F5F9', family=FONT_FAMILY, size=12),
+        ),
     )
 
-    # --- FORMATAÇÃO DOS EIXOS ---
     
     # Eixo Y da Linha 1 (Barras)
     fig.update_yaxes(
         title_text="Valor Monetário",
-        showgrid=True, gridcolor='#eee', zeroline=True, zerolinecolor='black',
-        range=range_fin, # <--- APLICA O CÁLCULO DE RESPONSIVIDADE AQUI
+        showgrid=True, gridcolor=GRID_COLOR,
+        zeroline=True, zerolinecolor=ZERO_LINE_COLOR,
+        tickfont=dict(color=FONT_COLOR),
+        title_font=dict(color=FONT_COLOR),
+        range=range_fin,
         row=1, col=1
     )
-    # Linha Zero Forte
     fig.add_shape(type='line', y0=0, y1=0, x0=-0.5, x1=len(cols_dates)-0.5, 
-                  line=dict(color='black', width=1.5), row=1, col=1)
+                  line=dict(color=ZERO_LINE_COLOR, width=1.5), row=1, col=1)
 
     # Eixo Y da Linha 2 (Crescimento)
     fig.update_yaxes(
         title_text="Crescimento (%)",
         tickformat='.0%',
-        showgrid=True, gridcolor='#eee', zeroline=True, zerolinecolor='gray',
-        range=range_pct, # <--- APLICA O CÁLCULO DE RESPONSIVIDADE AQUI
+        showgrid=True, gridcolor=GRID_COLOR,
+        zeroline=True, zerolinecolor=ZERO_LINE_COLOR,
+        tickfont=dict(color=FONT_COLOR),
+        title_font=dict(color=FONT_COLOR),
+        range=range_pct,
         row=2, col=1
     )
-    # Linha Zero Pontilhada
     fig.add_shape(type='line', y0=0, y1=0, x0=-0.5, x1=len(cols_dates)-0.5, 
-                  line=dict(color='gray', width=1, dash='dot'), row=2, col=1)
+                  line=dict(color=ZERO_LINE_COLOR, width=1, dash='dot'), row=2, col=1)
     
     fig.update_xaxes(type='category', row=1, col=1)
     fig.update_xaxes(type='category', row=2, col=1)
@@ -336,7 +329,6 @@ def render_bp_page():
 
     st.plotly_chart(fig, use_container_width=True)
 
-    # --- 7. NOTA EXPLICATIVA ---
     with st.expander("ℹ️ Entenda as Métricas de Crescimento"):
         st.markdown(f"""
         **1. CAGR ({cagr_val:.1%}):** *Compound Annual Growth Rate* (Taxa de Crescimento Anual Composta). 
@@ -353,7 +345,6 @@ def render_bp_page():
         **2. Crescimento do Ativo Total (Linha Azul - YoY):** *Year over Year*. É a variação percentual simples do Ativo em relação ao período imediatamente anterior (mostrada no gráfico inferior).
         """)
 
-    # --- 8. TABELA DE CHECK FINAL ---
     st.dataframe(
         row_check.style
             .map(style_validation_row, subset=cols_dates)
@@ -370,3 +361,12 @@ def render_bp_page():
         st.error(f"⚠️ Existem divergências contábeis significativas na escala {scale_option}!")
     else:
         st.success("Balanço validado: Ativo = Passivo + PL em todos os períodos.")
+
+    st.markdown("---")
+    ctx_bp = build_context_bp(df_pivot, cols_dates, nome_empresa, scale_option)
+    render_ai_panel(
+        contexto=ctx_bp,
+        prompt_fn=lambda c: _prompt_bp(c, nome_empresa),
+        titulo="🤖 Análise da IA — Balanço Patrimonial",
+        panel_key=f"bp_{selected_cnpj}",
+    )

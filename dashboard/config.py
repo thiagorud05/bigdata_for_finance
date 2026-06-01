@@ -1,6 +1,3 @@
-# config.py
-
-# Paleta de Cores FAE (Identidade Visual)
 CORES_FAE = {
     'roxo': '#9B2BC7',
     'dourado': '#E0D449',
@@ -10,7 +7,6 @@ CORES_FAE = {
     'cinza_escuro': '#404040'
 }
 
-# Configurações Gerais
 PAGE_CONFIG = {
     "page_title": "CVM Data Lake Explorer",
     "page_icon": "📊",
