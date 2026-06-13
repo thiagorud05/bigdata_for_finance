@@ -2,16 +2,20 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from database import get_companies_bp, get_dates_bp, get_bp_data_filtered
+from database import get_dates_bp, get_bp_data_filtered
 from chart_theme import (
     BG_TRANSPARENT, GRID_COLOR, ZERO_LINE_COLOR,
     FONT_COLOR, FONT_COLOR_TITLE, PALETA, FONT_FAMILY, LEGEND_BG,
+    plot_chart,
 )
 from ai_analyst import (
     render_ai_panel,
     build_context_bp,
     _prompt_bp,
 )
+from glossary import chart_tooltip
+
+import numpy as np
 
 def formatar_moeda_br(valor):
     """
@@ -19,9 +23,7 @@ def formatar_moeda_br(valor):
     """
     if pd.isna(valor):
         return "-"
-    # 1. Formata com padrão americano (vírgula no milhar, ponto no decimal)
     texto = f"{valor:,.2f}"
-    # 2. Faz a troca: Vírgula vira X, Ponto vira Vírgula, X vira Ponto
     return texto.replace(",", "X").replace(".", ",").replace("X", ".")
 
 def style_validation_row(val):
@@ -29,34 +31,176 @@ def style_validation_row(val):
     Pinta de vermelho se houver diferença contábil significativa, verde se zerado.
     """
     if isinstance(val, (int, float)):
-        # Tolerância de 0.01 para erros de arredondamento
-        if abs(val) > 0.01: 
+        if abs(val) > 0.01:
             return 'background-color: #ffcccc; color: #cc0000; font-weight: bold'
         return 'background-color: #e6fffa; color: #006600; font-weight: bold'
     return ''
 
+
+def _render_sunburst_bp(df_ativo, df_passivo, cols_dates):
+    """Sunburst interativo da estrutura patrimonial no último período."""
+    st.subheader("Estrutura Patrimonial", help=chart_tooltip("sunburst_bp"))
+    dt_ref = cols_dates[-1]
+
+    ids, labels, parents, values, colors = [], [], [], [], []
+    ids.append("root"); labels.append("Balanço"); parents.append(""); values.append(0)
+    colors.append("rgba(0,0,0,0)")
+
+    def add_group(df, grupo_id, grupo_label, grupo_cor):
+        rows_raiz = df[df["CD_CONTA"].str.match(r"^\d$")]
+        total = float(rows_raiz[dt_ref].sum()) if not rows_raiz.empty else 0
+        ids.append(grupo_id); labels.append(grupo_label)
+        parents.append("root"); values.append(abs(total)); colors.append(grupo_cor)
+        rows_sub = df[df["CD_CONTA"].str.match(r"^\d\.\d+$")]
+        for _, row in rows_sub.iterrows():
+            v = abs(float(row[dt_ref])) if row[dt_ref] != 0 else 0
+            if v < 0.001:
+                continue
+            sid = f"{grupo_id}_{row['CD_CONTA']}"
+            ids.append(sid); labels.append(row["DS_CONTA"][:28])
+            parents.append(grupo_id); values.append(v); colors.append(grupo_cor)
+
+    add_group(df_ativo,  "ativo",   "Ativo",        PALETA[2])
+    add_group(df_passivo,"passivo", "Passivo + PL",  PALETA[5])
+
+    if len(ids) < 4:
+        st.info("Dados insuficientes para o Sunburst.")
+        return
+
+    fig = go.Figure(go.Sunburst(
+        ids=ids, labels=labels, parents=parents, values=values,
+        marker=dict(colors=colors, line=dict(color="rgba(19,41,61,0.06)", width=1)),
+        branchvalues="remainder",
+        hovertemplate="<b>%{label}</b><br>%{value:,.2f}<br>%{percentRoot:.1%} do total<extra></extra>",
+        textfont=dict(family=FONT_FAMILY, size=11, color=FONT_COLOR_TITLE),
+        insidetextorientation="radial",
+        maxdepth=3,
+    ))
+    fig.update_layout(
+        paper_bgcolor=BG_TRANSPARENT, plot_bgcolor=BG_TRANSPARENT,
+        font=dict(family=FONT_FAMILY, color=FONT_COLOR),
+        height=430, margin=dict(t=10, b=10, l=10, r=10),
+    )
+    plot_chart(fig)
+    st.caption(f"📅 Período: **{dt_ref}** — clique nos segmentos para explorar.")
+
+
+def _render_evolucao_categorias(df_ativo, cols_dates, scale_option):
+    """Área empilhada mostrando como as categorias do ativo evoluíram."""
+    st.subheader("Evolução da Composição do Ativo", help=chart_tooltip("evolucao_ativo_bp"))
+
+    cats = {
+        "Caixa / Equiv.":  ("1.01.01", PALETA[0]),
+        "Recebíveis":       ("1.01.03", PALETA[4]),
+        "Estoques":         ("1.01.04", PALETA[5]),
+        "Outros Circ.":     ("1.01.06", PALETA[6]),
+        "Imobilizado":      ("1.02.03", PALETA[1]),
+        "Intangível":       ("1.02.04", PALETA[3]),
+        "Outros N.Circ.":   ("1.02.06", PALETA[2]),
+    }
+
+    fig = go.Figure()
+    for nome, (code, cor) in cats.items():
+        rows = df_ativo[df_ativo["CD_CONTA"] == code]
+        if rows.empty:
+            continue
+        vals = [float(rows[d].iloc[0]) if d in rows.columns else 0 for d in cols_dates]
+        if sum(abs(v) for v in vals) < 0.001:
+            continue
+        r, g, b = int(cor[1:3], 16), int(cor[3:5], 16), int(cor[5:7], 16)
+        fig.add_trace(go.Scatter(
+            x=cols_dates, y=vals, name=nome, mode="lines",
+            stackgroup="ativo",
+            line=dict(color=cor, width=1.2),
+            fillcolor=f"rgba({r},{g},{b},0.50)",
+            hovertemplate=f"{nome}: %{{y:,.2f}}<extra></extra>",
+        ))
+
+    fig.update_layout(
+        paper_bgcolor=BG_TRANSPARENT, plot_bgcolor=BG_TRANSPARENT,
+        font=dict(family=FONT_FAMILY, color=FONT_COLOR), height=430,
+        xaxis=dict(type="category", tickfont=dict(color=FONT_COLOR), gridcolor=GRID_COLOR),
+        yaxis=dict(tickfont=dict(color=FONT_COLOR), gridcolor=GRID_COLOR,
+                   title_text=f"Valor ({scale_option})", title_font=dict(color=FONT_COLOR)),
+        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1,
+                    bgcolor=LEGEND_BG, font=dict(color=FONT_COLOR, size=10)),
+        margin=dict(t=20, b=40, l=60, r=20), hovermode="x unified",
+        hoverlabel=dict(bgcolor="rgba(19,41,61,0.92)", font=dict(color="#E8F1F2")),
+    )
+    plot_chart(fig)
+
+
+def _render_estrutura_capital(df_ativo, df_passivo, cols_dates, scale_option):
+    """Barras divergentes: Ativo (positivo) × Passivo+PL (negativo)."""
+    st.subheader("Estrutura de Capital — Ativo vs Passivo", help=chart_tooltip("estrutura_capital_bp"))
+
+    cats_ativo = [
+        ("1.01", "Ativo Circulante",       PALETA[0]),
+        ("1.02", "Ativo Não Circulante",    PALETA[2]),
+    ]
+    cats_passivo = [
+        ("2.01", "Passivo Circulante",      PALETA[5]),
+        ("2.02", "Passivo Não Circulante",  PALETA[7]),
+        ("2.03", "Patrimônio Líquido",      PALETA[1]),
+    ]
+
+    fig = go.Figure()
+    for code, nome, cor in cats_ativo:
+        row = df_ativo[df_ativo["CD_CONTA"] == code]
+        if row.empty:
+            continue
+        vals = [float(row[d].iloc[0]) if d in row.columns else 0 for d in cols_dates]
+        r, g, b = int(cor[1:3], 16), int(cor[3:5], 16), int(cor[5:7], 16)
+        fig.add_trace(go.Bar(
+            name=nome, x=cols_dates, y=vals,
+            marker=dict(color=f"rgba({r},{g},{b},0.85)", line=dict(width=0)),
+            hovertemplate=f"{nome}: %{{y:,.2f}}<extra></extra>",
+        ))
+
+    for code, nome, cor in cats_passivo:
+        row = df_passivo[df_passivo["CD_CONTA"] == code]
+        if row.empty:
+            continue
+        vals = [-float(row[d].iloc[0]) if d in row.columns else 0 for d in cols_dates]
+        r, g, b = int(cor[1:3], 16), int(cor[3:5], 16), int(cor[5:7], 16)
+        fig.add_trace(go.Bar(
+            name=nome, x=cols_dates, y=vals,
+            marker=dict(color=f"rgba({r},{g},{b},0.85)", line=dict(width=0)),
+            customdata=[-v for v in vals],
+            hovertemplate=f"{nome}: %{{customdata:,.2f}}<extra></extra>",
+        ))
+
+    fig.add_hline(y=0, line_color=ZERO_LINE_COLOR, line_width=1.5)
+    fig.update_layout(
+        barmode="relative",
+        paper_bgcolor=BG_TRANSPARENT, plot_bgcolor=BG_TRANSPARENT,
+        font=dict(family=FONT_FAMILY, color=FONT_COLOR), height=400,
+        xaxis=dict(type="category", tickfont=dict(color=FONT_COLOR), gridcolor=GRID_COLOR),
+        yaxis=dict(tickfont=dict(color=FONT_COLOR), gridcolor=GRID_COLOR,
+                   title_text=f"Valor ({scale_option})", title_font=dict(color=FONT_COLOR),
+                   zeroline=True, zerolinecolor=ZERO_LINE_COLOR),
+        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1,
+                    bgcolor=LEGEND_BG, font=dict(color=FONT_COLOR, size=10)),
+        margin=dict(t=30, b=40, l=60, r=20), hovermode="x unified",
+        hoverlabel=dict(bgcolor="rgba(19,41,61,0.92)", font=dict(color="#E8F1F2")),
+        annotations=[dict(
+            text="▲ Ativo &nbsp;&nbsp; ▼ Passivo + PL",
+            xref="paper", yref="paper", x=0, y=1.05,
+            showarrow=False, font=dict(color=FONT_COLOR, size=11),
+        )],
+    )
+    plot_chart(fig)
+
+
 def render_bp_page():
     
+    selected_cnpj = st.session_state.get("global_cnpj")
+    selected_label = st.session_state.get("global_label", "")
+    if not selected_cnpj:
+        st.warning("Selecione uma empresa na barra lateral.")
+        return
+
     with st.sidebar:
-        st.header("Filtros de Análise")
-        
-        # A. Seleção de Empresa
-        df_empresas = get_companies_bp()
-        if df_empresas.empty:
-            st.warning("Base de dados indisponível.")
-            return
-
-        mapa_empresas = dict(zip(df_empresas['LABEL_DROPDOWN'], df_empresas['CNPJ_CIA']))
-        
-        selected_label = st.selectbox(
-            "Selecione a Empresa:",
-            options=df_empresas['LABEL_DROPDOWN'].tolist(),
-            placeholder="Digite o nome..."
-        )
-        selected_cnpj = mapa_empresas[selected_label]
-        
-        st.markdown("---")
-
         # B. Seleção de Datas
         df_dates = get_dates_bp(selected_cnpj)
         available_dates = df_dates['DT_REFER'].astype(str).tolist()
@@ -188,12 +332,12 @@ def render_bp_page():
             height=altura_dinamica # <--- AQUI A MÁGICA
         )
 
-    show_table(df_ativo, "🟢", "Ativo")
+    show_table(df_ativo, "", "Ativo")
     st.markdown("###")
-    show_table(df_passivo, "🔴", "Passivo e Patrimônio Líquido")
+    show_table(df_passivo, "", "Passivo e Patrimônio Líquido")
     st.markdown("###")
 
-    st.subheader("✅ Validação e Crescimento")
+    st.subheader("Validação e Crescimento", help=chart_tooltip("validacao_crescimento_bp"))
     
     eixo_x_str = [str(d) for d in cols_dates] 
 
@@ -327,7 +471,7 @@ def render_bp_page():
         yshift=30        # Sobe o título 30 pixels para desgrudar do gráfico (ajuste conforme gosto)
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    plot_chart(fig)
 
     with st.expander("ℹ️ Entenda as Métricas de Crescimento"):
         st.markdown(f"""
@@ -363,10 +507,22 @@ def render_bp_page():
         st.success("Balanço validado: Ativo = Passivo + PL em todos os períodos.")
 
     st.markdown("---")
+
+    st.subheader("Análise Visual Avançada")
+    col_g1, col_g2 = st.columns([1, 1])
+    with col_g1:
+        _render_sunburst_bp(df_ativo, df_passivo, cols_dates)
+    with col_g2:
+        _render_evolucao_categorias(df_ativo, cols_dates, scale_option)
+
+    st.markdown("###")
+    _render_estrutura_capital(df_ativo, df_passivo, cols_dates, scale_option)
+
+    st.markdown("---")
     ctx_bp = build_context_bp(df_pivot, cols_dates, nome_empresa, scale_option)
     render_ai_panel(
         contexto=ctx_bp,
         prompt_fn=lambda c: _prompt_bp(c, nome_empresa),
-        titulo="🤖 Análise da IA — Balanço Patrimonial",
+        titulo="Análise da IA — Balanço Patrimonial",
         panel_key=f"bp_{selected_cnpj}",
     )

@@ -527,6 +527,26 @@ Seja conciso. Use bullet points nas seções 2, 3 e 4.
 
 
 
+def _call_groq_chat(system_prompt: str, messages: list,
+                    model: str = "llama-3.3-70b-versatile",
+                    max_tokens: int = 1000) -> tuple:
+    """Chamada multi-turno ao Groq com histórico completo."""
+    client, err = _get_groq_client()
+    if client is None:
+        return None, err
+    try:
+        payload = [{"role": "system", "content": system_prompt}] + messages
+        response = client.chat.completions.create(
+            model=model,
+            messages=payload,
+            max_tokens=max_tokens,
+            temperature=0.4,
+        )
+        return response.choices[0].message.content, None
+    except Exception as e:
+        return None, f"Erro na chamada à API Groq: {e}"
+
+
 def render_ai_panel(
     contexto: str,
     prompt_fn,
@@ -534,17 +554,17 @@ def render_ai_panel(
     panel_key: str = "ai_panel",
 ):
     """
-    Renderiza o painel de análise de IA como um st.expander.
-
-    Parâmetros
-    ----------
-    contexto  : string com os dados formatados para o prompt
-    prompt_fn : callable(contexto) -> str  que monta o prompt final
-    titulo    : título do expander
-    panel_key : chave única do Streamlit para o botão
+    Painel de IA com análise inicial persistente e chat multi-turno contextual.
     """
+    hist_key  = f"_ai_hist_{panel_key}"   # histórico de mensagens
+    anl_key   = f"_ai_anl_{panel_key}"    # texto da análise inicial
+
+    if hist_key not in st.session_state:
+        st.session_state[hist_key] = []
+    if anl_key not in st.session_state:
+        st.session_state[anl_key] = None
+
     with st.expander(titulo, expanded=False):
-        # Verifica disponibilidade antes de mostrar o botão
         _, err_cfg = _get_groq_client()
         if err_cfg:
             st.info(
@@ -556,22 +576,79 @@ def render_ai_panel(
 
         st.caption("Powered by **Groq** · modelo `llama-3.3-70b-versatile`")
 
-        col_btn, col_warn = st.columns([1, 4])
+        # ── Botão de análise inicial ─────────────────────────────────────────
+        col_btn, col_reset, _ = st.columns([1, 1, 5])
         with col_btn:
-            analisar = st.button("▶ Analisar", key=f"btn_{panel_key}")
+            analisar = st.button("▶ Analisar", key=f"btn_anl_{panel_key}")
+        with col_reset:
+            if st.session_state[anl_key]:
+                if st.button("🔄 Reiniciar", key=f"btn_rst_{panel_key}"):
+                    st.session_state[anl_key] = None
+                    st.session_state[hist_key] = []
+                    st.rerun()
 
-        if analisar:
+        if analisar and not st.session_state[anl_key]:
             with st.spinner("Consultando a IA..."):
                 prompt_final = prompt_fn(contexto)
                 texto, err = _call_groq(
                     system_prompt=_SYSTEM_BASE,
                     user_prompt=prompt_final,
                 )
-
             if err:
                 st.warning(f"⚠️ Não foi possível gerar a análise: {err}")
             elif texto:
-                st.markdown("---")
-                st.markdown(texto)
-                st.caption("⚠️ Esta análise é gerada por IA e tem fins exclusivamente didáticos. "
-                           "Não constitui recomendação de investimento.")
+                st.session_state[anl_key] = texto
+                st.session_state[hist_key] = [
+                    {"role": "user",      "content": prompt_fn(contexto)},
+                    {"role": "assistant", "content": texto},
+                ]
+
+        # ── Exibe análise inicial ────────────────────────────────────────────
+        if st.session_state[anl_key]:
+            st.markdown("---")
+            # Escapa $ para evitar que o Streamlit interprete como LaTeX (\$xxx\$ fica verde)
+            texto_seguro = st.session_state[anl_key].replace("$", "\\$")
+            st.markdown(texto_seguro)
+            st.caption(
+                "⚠️ Esta análise é gerada por IA e tem fins exclusivamente didáticos. "
+                "Não constitui recomendação de investimento."
+            )
+
+            # ── Chat contextual ──────────────────────────────────────────────
+            st.markdown("---")
+            st.markdown("#### 💬 Converse sobre esta análise")
+            st.caption(f"A IA já conhece os dados de **{panel_key.split('_')[0].upper()}** desta empresa.")
+
+            # Exibe histórico de perguntas/respostas do chat (excluindo o par inicial)
+            chat_hist = st.session_state[hist_key][2:]   # pula o par análise inicial
+            for msg in chat_hist:
+                role = "user" if msg["role"] == "user" else "assistant"
+                with st.chat_message(role):
+                    # Escapa $ para evitar LaTeX — aplicado tanto no histórico quanto nas respostas novas
+                    st.markdown(msg["content"].replace("$", "\\$"))
+
+            # Input do usuário
+            user_input = st.chat_input(
+                "Faça uma pergunta sobre os dados...",
+                key=f"chat_input_{panel_key}",
+            )
+            if user_input:
+                st.session_state[hist_key].append({"role": "user", "content": user_input})
+                with st.chat_message("user"):
+                    st.markdown(user_input)
+
+                with st.chat_message("assistant"):
+                    with st.spinner("Pensando..."):
+                        resposta, err_chat = _call_groq_chat(
+                            system_prompt=_SYSTEM_BASE + f"\n\nContexto dos dados:\n{contexto}",
+                            messages=st.session_state[hist_key],
+                        )
+                    if err_chat:
+                        st.warning(f"⚠️ {err_chat}")
+                    else:
+                        # Escapa $ para evitar que o Streamlit interprete como LaTeX
+                        resposta_segura = resposta.replace("$", "\\$")
+                        st.markdown(resposta_segura)
+                        st.session_state[hist_key].append(
+                            {"role": "assistant", "content": resposta}
+                        )

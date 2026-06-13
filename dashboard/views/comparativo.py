@@ -17,6 +17,7 @@ from chart_theme import (
     bar_trace, line_trace, scatter_polar_trace,
     PALETA, CORES, FONT_COLOR, FONT_COLOR_TITLE,
     BG_TRANSPARENT, GRID_COLOR, ZERO_LINE_COLOR,
+    plot_chart,
 )
 from ai_analyst import (
     render_ai_panel,
@@ -29,25 +30,25 @@ from ai_analyst import (
 from glossary import tooltip
 
 GRUPOS_INDICADORES = {
-    "📈 Rentabilidade": {
+    "Rentabilidade": {
         "MARGEM_BRUTA":   ("Margem Bruta",    "pct", True),
         "MARGEM_EBIT":    ("Margem EBIT",      "pct", True),
         "MARGEM_LIQUIDA": ("Margem Líquida",   "pct", True),
         "ROA":            ("ROA",              "pct", True),
         "ROE":            ("ROE",              "pct", True),
     },
-    "💧 Liquidez": {
+    "Liquidez": {
         "LIQUIDEZ_CORRENTE":  ("Liq. Corrente",  "num", True),
         "LIQUIDEZ_SECA":      ("Liq. Seca",      "num", True),
         "LIQUIDEZ_IMEDIATA":  ("Liq. Imediata",  "num", True),
         "LIQUIDEZ_GERAL":     ("Liq. Geral",     "num", True),
     },
-    "🏦 Endividamento": {
+    "Endividamento": {
         "ENDIVIDAMENTO_GERAL":      ("Endividamento Geral",  "pct", False),
         "GRAU_ENDIVIDAMENTO":       ("Grau Endividamento",   "num", False),
         "COMPOSICAO_ENDIVIDAMENTO": ("Comp. Endividamento",  "pct", False),
     },
-    "🔄 Ciclos": {
+    "Ciclos": {
         "PMRV":             ("PMRV (dias)",      "dias", False),
         "PME":              ("PME (dias)",        "dias", False),
         "PMPF":             ("PMPF (dias)",       "dias", True),
@@ -111,7 +112,7 @@ def _render_radar(dfs: dict, cols: list):
         ))
 
     apply_polar_theme(fig, height=420)
-    st.plotly_chart(fig, use_container_width=True)
+    plot_chart(fig)
     st.caption("⚠️ Valores normalizados pelo máximo do grupo comparado — não representa percentil.")
 
 def _render_scorecard(emp_row, bench_row):
@@ -159,7 +160,7 @@ def _render_evolucao_vs_setor(cnpj, nome_empresa, setor):
             line=dict(color=PALETA[0], width=3),
             marker=dict(size=8, color=PALETA[0],
                         line=dict(width=1.5, color="rgba(255,255,255,0.3)")),
-            fill="tozeroy", fillcolor="rgba(168,85,247,0.08)",
+            fill="tozeroy", fillcolor="rgba(144,202,249,0.18)",
             hovertemplate=f"{nome_empresa}: %{{y:.1f}}%<extra></extra>",
         ))
 
@@ -178,38 +179,28 @@ def _render_evolucao_vs_setor(cnpj, nome_empresa, setor):
                   line_color="rgba(255,255,255,0.2)", line_width=1)
     apply_theme(fig, height=360, y_title="Margem Líquida (%)", y_suffix="%",
                 x_is_category=True)
-    st.plotly_chart(fig, use_container_width=True)
+    plot_chart(fig)
 
-def _render_heatmap_setores(df_all_bench, emp_row, nome_empresa, setor_empresa):
-    cols_hm   = [c for c in TODOS_INDICADORES if c in df_all_bench.columns]
-    labels_hm = [TODOS_INDICADORES[c][0] for c in cols_hm]
-    tipos_hm  = [TODOS_INDICADORES[c][1] for c in cols_hm]
-
-    df_hm = df_all_bench[["SETOR"] + cols_hm].dropna(subset=["SETOR"]).copy()
-
-    emp_row_dict = {"SETOR": f"★ {nome_empresa}"}
-    for c in cols_hm:
-        v = emp_row.get(c, None)
-        emp_row_dict[c] = float(v) if v is not None and not pd.isna(v) else None
-    df_hm = pd.concat([pd.DataFrame([emp_row_dict]), df_hm], ignore_index=True)
-
-    # Z-Score por coluna
+def _render_heatmap_grupo(df_hm, cols, labels, tipos, nome_empresa, tab_key):
+    """Renderiza um heatmap para um subconjunto de colunas (um grupo de indicadores)."""
+    # Z-Score por coluna — negado quando menor é melhor
     z_cols = []
-    for col in cols_hm:
+    for col in cols:
         col_data = pd.to_numeric(df_hm[col], errors="coerce")
         mn, sd = col_data.mean(), col_data.std()
-        z_cols.append(((col_data - mn) / sd).fillna(0).tolist() if sd and not np.isnan(sd) else [0.0]*len(df_hm))
+        z = ((col_data - mn) / sd).fillna(0) if sd and not np.isnan(sd) else pd.Series([0.0]*len(df_hm))
+        if not TODOS_INDICADORES[col][2]:
+            z = -z
+        z_cols.append(z.tolist())
 
-    z_t = list(map(list, zip(*z_cols)))   # (n_setores, n_cols)
-
-    text_m = []
-    for _, row_hm in df_hm.iterrows():
-        text_m.append([fmt_val(row_hm.get(c), t) for c, t in zip(cols_hm, tipos_hm)])
+    z_t   = list(map(list, zip(*z_cols)))
+    text_m = [[fmt_val(row.get(c), t) for c, t in zip(cols, tipos)]
+               for _, row in df_hm.iterrows()]
 
     fig = go.Figure(go.Heatmap(
-        z=z_t, x=labels_hm, y=df_hm["SETOR"].tolist(),
+        z=z_t, x=labels, y=df_hm["SETOR"].tolist(),
         text=text_m, texttemplate="%{text}",
-        textfont=dict(size=9, color="white"),
+        textfont=dict(size=10, color="#13293D"),
         colorscale="RdYlGn", zmid=0,
         colorbar=dict(
             title=dict(text="Z-Score", font=dict(color=FONT_COLOR, size=11)),
@@ -220,18 +211,50 @@ def _render_heatmap_setores(df_all_bench, emp_row, nome_empresa, setor_empresa):
 
     # Destaque linha da empresa
     fig.add_shape(
-        type="rect", x0=-0.5, x1=len(labels_hm)-0.5, y0=-0.5, y1=0.5,
+        type="rect", x0=-0.5, x1=len(labels)-0.5, y0=-0.5, y1=0.5,
         line=dict(color=PALETA[0], width=2.5),
         xref="x", yref="y",
     )
 
-    altura = max(380, len(df_hm) * 30 + 100)
+    altura = max(350, len(df_hm) * 34 + 80)
     apply_heatmap_theme(fig, height=altura)
-    st.plotly_chart(fig, use_container_width=True)
-    st.caption("🎨 Escala Z-Score: 🟢 acima da média | 🔴 abaixo | ⬜ na média. ★ = empresa selecionada.")
+    # margem esquerda menor quando há poucas colunas (leitura mobile)
+    fig.update_layout(margin=dict(t=20, b=60, l=160, r=40))
+    plot_chart(fig, key=f"hm_{tab_key}")
+
+
+def _render_heatmap_setores(df_all_bench, emp_row, nome_empresa, setor_empresa):
+    # Monta df base com empresa no topo
+    all_cols = [c for c in TODOS_INDICADORES if c in df_all_bench.columns]
+    df_setores = df_all_bench[["SETOR"] + all_cols].dropna(subset=["SETOR"]).copy()
+    emp_row_dict = {"SETOR": f"★ {nome_empresa}"}
+    for c in all_cols:
+        v = emp_row.get(c, None)
+        emp_row_dict[c] = float(v) if v is not None and not pd.isna(v) else None
+    df_hm = pd.concat([pd.DataFrame([emp_row_dict]), df_setores], ignore_index=True)
+
+    # Uma aba por grupo de indicadores + aba final com todos
+    tab_labels = list(GRUPOS_INDICADORES.keys()) + ["Todos"]
+    tabs = st.tabs(tab_labels)
+
+    for tab, (grupo, indicadores) in zip(tabs, GRUPOS_INDICADORES.items()):
+        cols   = [c for c in indicadores if c in all_cols]
+        labels = [indicadores[c][0] for c in cols]
+        tipos  = [indicadores[c][1] for c in cols]
+        with tab:
+            if cols:
+                _render_heatmap_grupo(df_hm, cols, labels, tipos, nome_empresa, grupo)
+            else:
+                st.info("Dados não disponíveis para este grupo.")
+
+    with tabs[-1]:
+        all_labels = [TODOS_INDICADORES[c][0] for c in all_cols]
+        all_tipos  = [TODOS_INDICADORES[c][1] for c in all_cols]
+        st.caption("📱 Recomendado usar na horizontal ou no computador para visualizar todos os indicadores.")
+        _render_heatmap_grupo(df_hm, all_cols, all_labels, all_tipos, nome_empresa, "todos")
 
 def render_empresa_vs_empresa(empresas_selecionadas: dict, data_ref: str):
-    st.subheader("🏢 Empresa vs Empresa")
+    st.subheader("Empresa vs Empresa")
     st.caption(f"Período de referência: **{data_ref}**")
 
     dfs = {}
@@ -245,7 +268,7 @@ def render_empresa_vs_empresa(empresas_selecionadas: dict, data_ref: str):
         st.warning("Nenhum dado encontrado para as empresas e data selecionadas.")
         return
 
-    st.markdown("#### 🕸️ Radar de Indicadores")
+    st.markdown("#### Radar de Indicadores")
     _render_radar(dfs, INDICADORES_RADAR)
     st.markdown("---")
 
@@ -273,10 +296,10 @@ def render_empresa_vs_empresa(empresas_selecionadas: dict, data_ref: str):
 
         fig.update_layout(barmode="group")
         apply_theme(fig, height=320, x_is_category=True)
-        st.plotly_chart(fig, use_container_width=True)
+        plot_chart(fig)
 
     # Evolução temporal — Margem Líquida
-    st.markdown("#### 📉 Evolução Temporal — Margem Líquida")
+    st.markdown("#### Evolução Temporal — Margem Líquida")
     fig_ev = go.Figure()
     for i, (cnpj, nome) in enumerate(empresas_selecionadas.items()):
         df = get_indicadores_data(cnpj)
@@ -296,7 +319,7 @@ def render_empresa_vs_empresa(empresas_selecionadas: dict, data_ref: str):
                      line_color="rgba(255,255,255,0.2)", line_width=1)
     apply_theme(fig_ev, height=360, y_title="Margem Líquida (%)", y_suffix="%",
                 x_is_category=True)
-    st.plotly_chart(fig_ev, use_container_width=True)
+    plot_chart(fig_ev)
 
     with st.expander("📋 Tabela Comparativa"):
         rows = [{"Indicador": TODOS_INDICADORES[c][0],
@@ -319,13 +342,13 @@ def render_empresa_vs_empresa(empresas_selecionadas: dict, data_ref: str):
     render_ai_panel(
         contexto=ctx,
         prompt_fn=lambda c: _prompt_comparativo(c, "Empresa vs Empresa"),
-        titulo="🤖 Análise da IA — Comparativo entre Empresas",
+        titulo="Análise da IA — Comparativo entre Empresas",
         panel_key="cmp_emp_emp",
     )
 
 
 def render_empresa_vs_setor(cnpj: str, nome_empresa: str, setor: str, data_ref: str):
-    st.subheader(f"🏭 {nome_empresa} × Setor: {setor}")
+    st.subheader(f"{nome_empresa} × Setor: {setor}")
     st.caption(f"Período: **{data_ref}** | Benchmark: **mediana do setor**")
 
     df_emp   = get_indicadores_data(cnpj)
@@ -341,7 +364,7 @@ def render_empresa_vs_setor(cnpj: str, nome_empresa: str, setor: str, data_ref: 
     emp_row   = df_emp_dt.iloc[0]
     bench_row = df_bench.iloc[0]
 
-    st.markdown("#### 🕸️ Radar — Empresa vs Mediana do Setor")
+    st.markdown("#### Radar — Empresa vs Mediana do Setor")
     _render_radar({nome_empresa: emp_row, f"⌀ Mediana {setor}": bench_row}, INDICADORES_RADAR)
     st.markdown("---")
 
@@ -395,13 +418,10 @@ def render_empresa_vs_setor(cnpj: str, nome_empresa: str, setor: str, data_ref: 
 
         fig.update_layout(barmode="group")
         apply_theme(fig, height=320, x_is_category=True)
-        st.plotly_chart(fig, use_container_width=True)
+        plot_chart(fig)
 
-    st.markdown("#### 🎯 Posicionamento vs Mediana")
+    st.markdown("#### Posicionamento vs Mediana")
     _render_scorecard(emp_row, bench_row)
-
-    st.markdown("#### 📉 Evolução Temporal — Margem Líquida vs Setor")
-    _render_evolucao_vs_setor(cnpj, nome_empresa, setor)
 
     # IA
     st.markdown("---")
@@ -409,13 +429,13 @@ def render_empresa_vs_setor(cnpj: str, nome_empresa: str, setor: str, data_ref: 
     render_ai_panel(
         contexto=ctx,
         prompt_fn=lambda c: _prompt_comparativo(c, f"Empresa vs Setor ({setor})"),
-        titulo="🤖 Análise da IA — Empresa vs Setor",
+        titulo="Análise da IA — Empresa vs Setor",
         panel_key=f"cmp_emp_setor_{setor}",
     )
 
 
 def render_empresa_vs_todos_setores(cnpj: str, nome_empresa: str, data_ref: str):
-    st.subheader(f"🌐 {nome_empresa} × Todos os Setores")
+    st.subheader(f"{nome_empresa} × Todos os Setores")
     st.caption(f"Período: **{data_ref}** | Benchmark: mediana por setor")
 
     df_emp    = get_indicadores_data(cnpj)
@@ -430,11 +450,18 @@ def render_empresa_vs_todos_setores(cnpj: str, nome_empresa: str, data_ref: str)
     emp_row = df_emp_dt.iloc[0]
     setor_empresa = emp_row.get("SETOR", "—")
 
-    st.markdown("#### 🗺️ Heatmap — Indicadores por Setor")
+    st.markdown("#### Heatmap — Indicadores por Setor")
+    st.markdown(
+        '<div class="mobile-heatmap-hint">'
+        '📱 <strong>Dica:</strong> Gire o celular na horizontal ou acesse pelo computador '
+        'para melhor visualização do heatmap.'
+        '</div>',
+        unsafe_allow_html=True,
+    )
     _render_heatmap_setores(df_all, emp_row, nome_empresa, setor_empresa)
     st.markdown("---")
 
-    st.markdown("#### 🏆 Ranking por Indicador")
+    st.markdown("#### Ranking por Indicador")
     ind_opcoes = {TODOS_INDICADORES[k][0]: k for k in TODOS_INDICADORES
                   if k in df_all.columns}
     ind_label = st.selectbox(
@@ -476,7 +503,7 @@ def render_empresa_vs_todos_setores(cnpj: str, nome_empresa: str, data_ref: str)
     apply_theme(fig_r, height=420, y_title=ind_label, x_is_category=True)
     fig_r.update_layout(margin=dict(b=130))
     fig_r.update_xaxes(tickangle=-35)
-    st.plotly_chart(fig_r, use_container_width=True)
+    plot_chart(fig_r)
 
     with st.expander("📋 Tabela Completa por Setor"):
         colunas_exib = ["SETOR"] + [c for c in TODOS_INDICADORES if c in df_all.columns]
@@ -493,7 +520,7 @@ def render_empresa_vs_todos_setores(cnpj: str, nome_empresa: str, data_ref: str)
     render_ai_panel(
         contexto=ctx,
         prompt_fn=lambda c: _prompt_vs_todos_setores(c, nome_empresa),
-        titulo="🤖 Análise da IA — Empresa vs Todos os Setores",
+        titulo="Análise da IA — Empresa vs Todos os Setores",
         panel_key=f"cmp_global_{cnpj}",
     )
 
@@ -589,7 +616,7 @@ def render_comparativo_page():
             empresas_selecionadas = {}
 
     # ── CORPO ────────────────────────────────────────────────────────────────
-    st.title("🔍 Comparativo de Empresas e Setores")
+    st.title("Comparativo de Empresas e Setores")
     st.markdown("---")
 
     if modo == "🏢 Empresa vs Empresa":

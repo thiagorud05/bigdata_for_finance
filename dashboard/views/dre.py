@@ -8,17 +8,18 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from database import get_companies_demonstrativo, get_dates_demonstrativo, get_demonstrativo_filtered
+from database import get_dates_demonstrativo, get_demonstrativo_filtered
 from chart_theme import (
     BG_TRANSPARENT, GRID_COLOR, ZERO_LINE_COLOR,
     FONT_COLOR, FONT_COLOR_TITLE, PALETA, FONT_FAMILY, LEGEND_BG,
-    apply_theme,
+    apply_theme, plot_chart,
 )
 from ai_analyst import (
     render_ai_panel,
     build_context_dre,
     _prompt_dre,
 )
+from glossary import chart_tooltip
 
 def formatar_moeda_br(valor):
     if pd.isna(valor):
@@ -76,7 +77,7 @@ def _show_table(df_input, titulo, scale_option, cols_dates):
                  column_config=col_cfg, height=altura)
 
 def _render_waterfall(df_pivot, cols_dates, scale_option):
-    st.subheader("📊 Cascata do Resultado (último período)")
+    st.subheader("Cascata do Resultado (último período)", help=chart_tooltip("waterfall_dre"))
 
     dt_ref = cols_dates[-1]
 
@@ -135,11 +136,11 @@ def _render_waterfall(df_pivot, cols_dates, scale_option):
     ))
 
     apply_theme(fig, height=420, y_title=f"Valor ({scale_option})", x_is_category=True)
-    st.plotly_chart(fig, use_container_width=True)
-    st.caption(f"📅 Período de referência: **{dt_ref}**")
+    plot_chart(fig)
+    st.caption(f"Período de referência: **{dt_ref}**")
 
 def _render_evolucao_resultado(df_pivot, cols_dates, scale_option):
-    st.subheader("📈 Evolução Temporal — Receita, Resultado Bruto e Lucro Líquido")
+    st.subheader("Evolução Temporal — Receita, Resultado Bruto e Lucro Líquido", help=chart_tooltip("evolucao_resultado_dre"))
 
     series = {
         "Receita Líquida": ("3.01", PALETA[1]),
@@ -166,10 +167,10 @@ def _render_evolucao_resultado(df_pivot, cols_dates, scale_option):
     fig.add_hline(y=0, line_dash="dot",
                   line_color="rgba(255,255,255,0.2)", line_width=1)
     apply_theme(fig, height=380, y_title=f"Valor ({scale_option})", x_is_category=True)
-    st.plotly_chart(fig, use_container_width=True)
+    plot_chart(fig)
 
 def _render_margens(df_pivot, cols_dates):
-    st.subheader("📉 Margens — Evolução Histórica")
+    st.subheader("Margens — Evolução Histórica", help=chart_tooltip("margens_dre"))
 
     receita = _get_conta(df_pivot, "3.01", cols_dates)
     if receita.abs().sum() == 0:
@@ -201,7 +202,7 @@ def _render_margens(df_pivot, cols_dates):
     fig.add_hline(y=0, line_dash="dot",
                   line_color="rgba(255,255,255,0.2)", line_width=1)
     apply_theme(fig, height=360, y_title="Margem (%)", y_suffix="%", x_is_category=True)
-    st.plotly_chart(fig, use_container_width=True)
+    plot_chart(fig)
 
 def _render_crescimento(df_pivot, cols_dates, empresa):
     receita = _get_conta(df_pivot, "3.01", cols_dates)
@@ -213,7 +214,7 @@ def _render_crescimento(df_pivot, cols_dates, empresa):
     anos = len(receita) - 1
     cagr = (val_fin / val_ini) ** (1 / anos) - 1 if val_ini > 0 and anos > 0 else 0
 
-    st.subheader(f"📊 Crescimento da Receita — CAGR do período: {cagr:.1%}")
+    st.subheader(f"Crescimento da Receita — CAGR do período: {cagr:.1%}", help=chart_tooltip("crescimento_receita_dre"))
 
     fig = make_subplots(
         rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.18,
@@ -265,26 +266,111 @@ def _render_crescimento(df_pivot, cols_dates, empresa):
     fig.update_yaxes(ticksuffix="%", row=2, col=1)
     fig.update_annotations(x=0, xanchor="left", font_size=13, yshift=20)
 
-    st.plotly_chart(fig, use_container_width=True)
+    plot_chart(fig)
+
+def _render_funil_margens(df_pivot, cols_dates, scale_option):
+    """Funil de margens no último período — Receita → Bruto → EBIT → Líquido."""
+    st.subheader("Funil de Margens (último período)", help=chart_tooltip("funil_margens_dre"))
+    dt_ref = cols_dates[-1]
+
+    def val(code):
+        r = df_pivot[df_pivot["CD_CONTA"] == code]
+        return float(r[dt_ref].iloc[0]) if not r.empty else None
+
+    receita = val("3.01")
+    if not receita or receita == 0:
+        st.info("Receita (3.01) não encontrada.")
+        return
+
+    itens = [
+        ("Receita Líquida", receita, PALETA[1]),
+        ("Lucro Bruto",     val("3.03"), PALETA[2]),
+        ("EBIT",            val("3.05"), PALETA[0]),
+        ("Lucro Líquido",   val("3.11"), PALETA[4]),
+    ]
+    labels, vals, cores, textos = [], [], [], []
+    for nome, v, cor in itens:
+        if v is None:
+            continue
+        pct = (v / receita) * 100
+        labels.append(nome)
+        vals.append(abs(v))
+        cores.append(cor)
+        textos.append(f"{formatar_moeda_br(v)} ({pct:.1f}%)")
+
+    fig = go.Figure(go.Funnel(
+        y=labels, x=vals,
+        text=textos,
+        textinfo="text",
+        textfont=dict(color=FONT_COLOR, size=11, family=FONT_FAMILY),
+        marker=dict(color=cores, line=dict(width=1.5, color="rgba(19,41,61,0.08)")),
+        connector=dict(line=dict(color=ZERO_LINE_COLOR, dash="dot", width=1)),
+        hovertemplate="%{y}: %{text}<extra></extra>",
+    ))
+    fig.update_layout(
+        paper_bgcolor=BG_TRANSPARENT, plot_bgcolor=BG_TRANSPARENT,
+        font=dict(family=FONT_FAMILY, color=FONT_COLOR),
+        height=380, margin=dict(t=20, b=20, l=120, r=20),
+    )
+    plot_chart(fig)
+    st.caption(f"Período: **{dt_ref}**")
+
+
+def _render_custo_receita(df_pivot, cols_dates, scale_option):
+    """Área empilhada da decomposição de custos em relação à receita."""
+    st.subheader("Decomposição de Custos sobre Receita", help=chart_tooltip("custo_receita_dre"))
+
+    receita = _get_conta(df_pivot, "3.01", cols_dates)
+    if receita.abs().sum() == 0:
+        st.info("Receita (3.01) não disponível.")
+        return
+
+    config = [
+        ("3.02", "CPV/CSP",          PALETA[7]),
+        ("3.04", "Despesas Operac.", PALETA[5]),
+        ("3.06", "Res. Financeiro",  PALETA[6]),
+        ("3.08", "IR / CSLL",        PALETA[3]),
+    ]
+
+    fig = go.Figure()
+    for code, nome, cor in config:
+        serie = _get_conta(df_pivot, code, cols_dates)
+        if serie.abs().sum() == 0:
+            continue
+        pct = (serie.abs() / receita.replace(0, float("nan"))) * 100
+        r, g, b = int(cor[1:3], 16), int(cor[3:5], 16), int(cor[5:7], 16)
+        fig.add_trace(go.Scatter(
+            x=cols_dates, y=pct.values, name=nome, mode="lines",
+            stackgroup="custo",
+            line=dict(color=cor, width=1.2),
+            fillcolor=f"rgba({r},{g},{b},0.55)",
+            hovertemplate=f"{nome}: %{{y:.1f}}% da receita<extra></extra>",
+        ))
+
+    fig.update_layout(
+        paper_bgcolor=BG_TRANSPARENT, plot_bgcolor=BG_TRANSPARENT,
+        font=dict(family=FONT_FAMILY, color=FONT_COLOR), height=380,
+        xaxis=dict(type="category", tickfont=dict(color=FONT_COLOR), gridcolor=GRID_COLOR),
+        yaxis=dict(tickfont=dict(color=FONT_COLOR), gridcolor=GRID_COLOR,
+                   title_text="% sobre Receita", title_font=dict(color=FONT_COLOR),
+                   ticksuffix="%"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1,
+                    bgcolor=LEGEND_BG, font=dict(color=FONT_COLOR, size=10)),
+        margin=dict(t=20, b=40, l=60, r=20), hovermode="x unified",
+        hoverlabel=dict(bgcolor="rgba(19,41,61,0.92)", font=dict(color="#E8F1F2")),
+    )
+    plot_chart(fig)
+
 
 def render_dre_page():
 
+    selected_cnpj = st.session_state.get("global_cnpj")
+    selected_label = st.session_state.get("global_label", "")
+    if not selected_cnpj:
+        st.warning("Selecione uma empresa na barra lateral.")
+        return
+
     with st.sidebar:
-        st.header("Filtros — DRE")
-
-        df_empresas = get_companies_demonstrativo("dre")
-        if df_empresas.empty:
-            st.warning("Tabela DRE indisponível ou sem dados.")
-            return
-
-        mapa = dict(zip(df_empresas["LABEL_DROPDOWN"], df_empresas["CNPJ_CIA"]))
-        selected_label = st.selectbox(
-            "Empresa:", options=df_empresas["LABEL_DROPDOWN"].tolist(),
-            key="dre_empresa",
-        )
-        selected_cnpj = mapa[selected_label]
-        st.markdown("---")
-
         df_dates = get_dates_demonstrativo(selected_cnpj, "dre")
         available_dates = df_dates["DT_REFER"].astype(str).tolist()
         if not available_dates:
@@ -312,7 +398,7 @@ def render_dre_page():
 
     # Cabeçalho
     nome_empresa = selected_label.split(" (")[0]
-    st.title(f"📋 DRE — {nome_empresa}")
+    st.title(f"DRE — {nome_empresa}")
     st.caption(f"**CNPJ:** {selected_cnpj} | Demonstração do Resultado do Exercício")
 
     # Carga
@@ -329,7 +415,7 @@ def render_dre_page():
     st.markdown("---")
 
     # Tabela completa
-    _show_table(df_pivot, f"📋 Demonstração do Resultado ({scale_option})", scale_option, cols_dates)
+    _show_table(df_pivot, f"Demonstração do Resultado ({scale_option})", scale_option, cols_dates)
     st.markdown("---")
 
     # Gráficos
@@ -345,13 +431,20 @@ def render_dre_page():
     st.markdown("###")
     _render_crescimento(df_pivot, cols_dates, nome_empresa)
 
+    st.markdown("###")
+    col_e, col_f = st.columns([1, 1])
+    with col_e:
+        _render_funil_margens(df_pivot, cols_dates, scale_option)
+    with col_f:
+        _render_custo_receita(df_pivot, cols_dates, scale_option)
+
     # IA
     st.markdown("---")
     ctx_dre = build_context_dre(df_pivot, cols_dates, nome_empresa, scale_option)
     render_ai_panel(
         contexto=ctx_dre,
         prompt_fn=lambda c: _prompt_dre(c, nome_empresa),
-        titulo="🤖 Análise da IA — DRE",
+        titulo="Análise da IA — DRE",
         panel_key=f"dre_{selected_cnpj}",
     )
 

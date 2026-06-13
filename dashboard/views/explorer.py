@@ -14,8 +14,7 @@ def render_explorer_page():
         # Tenta deixar 'layer_01_bronze' como padrão se existir
         idx_padrao = schemas_disponiveis.index('layer_01_bronze') if 'layer_01_bronze' in schemas_disponiveis else 0
         
-        target_schema = st.selectbox(
-            "Selecione a Camada (Schema):", 
+        target_schema = st.selectbox( "Selecione a Camada (Schema):", 
             schemas_disponiveis, 
             index=idx_padrao
         )
@@ -29,7 +28,7 @@ def render_explorer_page():
         # Se for Silver/Gold, usa a lógica de tabelas diretas
         
         if target_schema == 'layer_01_bronze':
-            st.caption("📂 Modo: Navegação por Arquivos")
+            st.caption(" Modo: Navegação por Arquivos")
             dataset_type = st.selectbox("Tipo de Documento:", ['FRE', 'DFP', 'ITR', 'CAD'], index=0)
             
             df_catalog = get_available_datasets(dataset_type, schema=target_schema)
@@ -44,7 +43,7 @@ def render_explorer_page():
                 st.warning(f"Sem logs de carga em {target_schema}.")
                 
         else:
-            st.caption("🗃️ Modo: Navegação Direta")
+            st.caption(" Modo: Navegação Direta")
             # Lista tabelas simples para Silver/Gold
             tabelas_schema = get_tables_in_schema(target_schema)
             
@@ -53,7 +52,7 @@ def render_explorer_page():
             else:
                 st.warning(f"Nenhuma tabela encontrada em {target_schema}.")
 
-    st.title(f"🔎 Explorador - {target_schema}")
+    st.title(f" Explorador - {target_schema}")
     
     if selected_table:
         with st.spinner(f"Carregando {selected_table}..."):
@@ -69,7 +68,7 @@ def render_explorer_page():
             c3.metric("Memória (DataFrame)", f"{memoria:.2f} MB")
             
             # ABAS
-            tab1, tab2, tab3 = st.tabs(["📄 Dados Brutos", "📊 Visualização Rápida", "🔍 Estrutura"])
+            tab1, tab2, tab3 = st.tabs([" Dados Brutos", " Visualização Rápida", " Estrutura"])
             
             with tab1:
                 st.dataframe(df, use_container_width=True)
@@ -90,7 +89,7 @@ def render_explorer_page():
                     try:
                         # Agregação automática se for muito grande
                         if len(df) > 5000 and y:
-                            st.info("⚠️ Dados agregados (Média) para performance visual.")
+                            st.info(" Dados agregados (Média) para performance visual.")
                             df_viz = df.groupby(x)[y].mean().reset_index()
                         else:
                             df_viz = df.head(5000) # Limita para não travar o navegador
@@ -111,7 +110,7 @@ def render_explorer_page():
 
                         if fig:
                             fig.update_traces(marker_color=CORES_FAE['roxo'])
-                            st.plotly_chart(fig, use_container_width=True)
+                            plot_chart(fig)
                             
                     except Exception as e:
                         st.error(f"Não foi possível gerar o gráfico: {e}")
@@ -124,4 +123,4 @@ def render_explorer_page():
         else:
             st.warning("A tabela selecionada está vazia.")
     else:
-        st.info("👈 Selecione um Schema e uma Tabela no menu lateral.")
+        st.info(" Selecione um Schema e uma Tabela no menu lateral.")

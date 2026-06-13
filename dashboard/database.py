@@ -19,9 +19,9 @@ def get_db_connection():
 def get_companies_bp():
     engine = get_db_connection()
     query = """
-    SELECT DISTINCT "CNPJ_CIA", "DENOM_CIA"
-    FROM layer_02_silver.n1_dfp_cia_aberta_bp
-    ORDER BY "DENOM_CIA";
+        SELECT DISTINCT "CNPJ_CIA", "DENOM_CIA"
+        FROM layer_02_silver.n1_dfp_cia_aberta_bp
+        ORDER BY "DENOM_CIA";
     """
     try:
         with engine.connect() as conn:
@@ -37,10 +37,10 @@ def get_companies_bp():
 def get_dates_bp(cnpj):
     engine = get_db_connection()
     query = f"""
-    SELECT DISTINCT "DT_REFER"
-    FROM layer_02_silver.n1_dfp_cia_aberta_bp
-    WHERE "CNPJ_CIA" = '{cnpj}'
-    ORDER BY "DT_REFER" DESC;
+        SELECT DISTINCT "DT_REFER"
+        FROM layer_02_silver.n1_dfp_cia_aberta_bp
+        WHERE "CNPJ_CIA" = '{cnpj}'
+        ORDER BY "DT_REFER" DESC;
     """
     try:
         with engine.connect() as conn:
@@ -58,16 +58,12 @@ def get_bp_data_filtered(cnpj, dates, max_level):
     dates_str = "', '".join([str(d) for d in dates])
 
     query = f"""
-    SELECT
-        "CD_CONTA",
-        "DS_CONTA",
-        "DT_REFER",
-        "VL_CONTA_TRATADO"
-    FROM layer_02_silver.n1_dfp_cia_aberta_bp
-    WHERE "CNPJ_CIA" = '{cnpj}'
-      AND "DT_REFER" IN ('{dates_str}')
-      AND LENGTH(REPLACE("CD_CONTA", '.', '')) <= {max_digits}
-    ORDER BY "CD_CONTA", "DT_REFER";
+        SELECT "CD_CONTA", "DS_CONTA", "DT_REFER", "VL_CONTA_TRATADO"
+        FROM layer_02_silver.n1_dfp_cia_aberta_bp
+        WHERE "CNPJ_CIA" = '{cnpj}'
+          AND "DT_REFER" IN ('{dates_str}')
+          AND LENGTH(REPLACE("CD_CONTA", '.', '')) <= {max_digits}
+        ORDER BY "CD_CONTA", "DT_REFER";
     """
     try:
         with engine.connect() as conn:
@@ -81,10 +77,10 @@ def get_bp_data_filtered(cnpj, dates, max_level):
 def get_companies_indicadores():
     engine = get_db_connection()
     query = """
-    SELECT DISTINCT "CNPJ_CIA", "RAZAO_SOCIAL"
-    FROM layer_03_gold.mart_indicadores_financeiros
-    WHERE "CNPJ_CIA" IS NOT NULL
-    ORDER BY "RAZAO_SOCIAL";
+        SELECT DISTINCT "CNPJ_CIA", "RAZAO_SOCIAL"
+        FROM layer_03_gold.mart_indicadores_financeiros
+        WHERE "CNPJ_CIA" IS NOT NULL
+        ORDER BY "RAZAO_SOCIAL";
     """
     try:
         with engine.connect() as conn:
@@ -100,10 +96,10 @@ def get_companies_indicadores():
 def get_indicadores_data(cnpj):
     engine = get_db_connection()
     query = f"""
-    SELECT *
-    FROM layer_03_gold.mart_indicadores_financeiros
-    WHERE "CNPJ_CIA" = '{cnpj}'
-    ORDER BY "DT_REFER" ASC;
+        SELECT *
+        FROM layer_03_gold.mart_indicadores_financeiros
+        WHERE "CNPJ_CIA" = '{cnpj}'
+        ORDER BY "DT_REFER" ASC;
     """
     try:
         with engine.connect() as conn:
@@ -126,11 +122,11 @@ _COLS_INDICADORES = [
 def get_sectors_list():
     engine = get_db_connection()
     query = """
-    SELECT DISTINCT "SETOR_ATIV"
-    FROM layer_02_silver.n0_empresas_selecionadas
-    WHERE "SETOR_ATIV" IS NOT NULL
-      AND TRIM("SETOR_ATIV") <> ''
-    ORDER BY "SETOR_ATIV";
+        SELECT DISTINCT "SETOR_ATIV"
+        FROM layer_02_silver.n0_empresas_selecionadas
+        WHERE "SETOR_ATIV" IS NOT NULL
+          AND TRIM("SETOR_ATIV") <> ''
+        ORDER BY "SETOR_ATIV";
     """
     try:
         with engine.connect() as conn:
@@ -156,13 +152,13 @@ def get_sector_benchmark(setor: str, dt_refer: str, incluir_quartis: bool = Fals
     agg_sql = ",\n    ".join(agg_parts)
 
     query = f"""
-    SELECT
-        {agg_sql}
-    FROM layer_03_gold.mart_indicadores_financeiros m
-    INNER JOIN layer_02_silver.n0_empresas_selecionadas e
-        ON m."CNPJ_CIA" = e."CNPJ_CIA"
-    WHERE e."SETOR_ATIV" = '{setor}'
-      AND m."DT_REFER" = '{dt_refer}';
+        SELECT
+            {agg_sql}
+        FROM layer_03_gold.mart_indicadores_financeiros m
+        INNER JOIN layer_02_silver.n0_empresas_selecionadas e
+            ON m."CNPJ_CIA" = e."CNPJ_CIA"
+        WHERE e."SETOR_ATIV" = '{setor}'
+          AND m."DT_REFER" = '{dt_refer}';
     """
     try:
         with engine.connect() as conn:
@@ -184,17 +180,17 @@ def get_all_sectors_benchmark(dt_refer: str):
     agg_sql = ",\n    ".join(agg_parts)
 
     query = f"""
-    SELECT
-        e."SETOR_ATIV" AS "SETOR",
-        {agg_sql}
-    FROM layer_03_gold.mart_indicadores_financeiros m
-    INNER JOIN layer_02_silver.n0_empresas_selecionadas e
-        ON m."CNPJ_CIA" = e."CNPJ_CIA"
-    WHERE m."DT_REFER" = '{dt_refer}'
-      AND e."SETOR_ATIV" IS NOT NULL
-      AND TRIM(e."SETOR_ATIV") <> ''
-    GROUP BY e."SETOR_ATIV"
-    ORDER BY e."SETOR_ATIV";
+        SELECT
+            e."SETOR_ATIV" AS "SETOR",
+            {agg_sql}
+        FROM layer_03_gold.mart_indicadores_financeiros m
+        INNER JOIN layer_02_silver.n0_empresas_selecionadas e
+            ON m."CNPJ_CIA" = e."CNPJ_CIA"
+        WHERE m."DT_REFER" = '{dt_refer}'
+          AND e."SETOR_ATIV" IS NOT NULL
+          AND TRIM(e."SETOR_ATIV") <> ''
+        GROUP BY e."SETOR_ATIV"
+        ORDER BY e."SETOR_ATIV";
     """
     try:
         with engine.connect() as conn:
@@ -216,16 +212,16 @@ def get_sector_time_series(setor: str):
     agg_sql = ",\n    ".join(agg_parts)
 
     query = f"""
-    SELECT
-        m."DT_REFER",
-        {agg_sql}
-    FROM layer_03_gold.mart_indicadores_financeiros m
-    INNER JOIN layer_02_silver.n0_empresas_selecionadas e
-        ON m."CNPJ_CIA" = e."CNPJ_CIA"
-    WHERE e."SETOR_ATIV" = '{setor}'
-      AND m."DT_REFER" IS NOT NULL
-    GROUP BY m."DT_REFER"
-    ORDER BY m."DT_REFER";
+        SELECT
+            m."DT_REFER",
+            {agg_sql}
+        FROM layer_03_gold.mart_indicadores_financeiros m
+        INNER JOIN layer_02_silver.n0_empresas_selecionadas e
+            ON m."CNPJ_CIA" = e."CNPJ_CIA"
+        WHERE e."SETOR_ATIV" = '{setor}'
+          AND m."DT_REFER" IS NOT NULL
+        GROUP BY m."DT_REFER"
+        ORDER BY m."DT_REFER";
     """
     try:
         with engine.connect() as conn:
@@ -239,16 +235,16 @@ def get_sector_time_series(setor: str):
 def get_companies_with_sector():
     engine = get_db_connection()
     query = """
-    SELECT DISTINCT
-        m."CNPJ_CIA",
-        m."RAZAO_SOCIAL",
-        COALESCE(e."SETOR_ATIV", m."SETOR") AS "SETOR_ATIV",
-        m."TP_MERC"
-    FROM layer_03_gold.mart_indicadores_financeiros m
-    LEFT JOIN layer_02_silver.n0_empresas_selecionadas e
-        ON m."CNPJ_CIA" = e."CNPJ_CIA"
-    WHERE m."CNPJ_CIA" IS NOT NULL
-    ORDER BY m."RAZAO_SOCIAL";
+        SELECT DISTINCT
+            m."CNPJ_CIA",
+            m."RAZAO_SOCIAL",
+            COALESCE(e."SETOR_ATIV", m."SETOR") AS "SETOR_ATIV",
+            m."TP_MERC"
+        FROM layer_03_gold.mart_indicadores_financeiros m
+        LEFT JOIN layer_02_silver.n0_empresas_selecionadas e
+            ON m."CNPJ_CIA" = e."CNPJ_CIA"
+        WHERE m."CNPJ_CIA" IS NOT NULL
+        ORDER BY m."RAZAO_SOCIAL";
     """
     try:
         with engine.connect() as conn:
@@ -277,9 +273,9 @@ def get_companies_demonstrativo(tabela_alias: str):
         return pd.DataFrame()
     engine = get_db_connection()
     query = f"""
-    SELECT DISTINCT "CNPJ_CIA", "DENOM_CIA"
-    FROM {tabela}
-    ORDER BY "DENOM_CIA";
+        SELECT DISTINCT "CNPJ_CIA", "DENOM_CIA"
+        FROM {tabela}
+        ORDER BY "DENOM_CIA";
     """
     try:
         with engine.connect() as conn:
@@ -298,10 +294,10 @@ def get_dates_demonstrativo(cnpj: str, tabela_alias: str):
         return pd.DataFrame()
     engine = get_db_connection()
     query = f"""
-    SELECT DISTINCT "DT_REFER"
-    FROM {tabela}
-    WHERE "CNPJ_CIA" = '{cnpj}'
-    ORDER BY "DT_REFER" DESC;
+        SELECT DISTINCT "DT_REFER"
+        FROM {tabela}
+        WHERE "CNPJ_CIA" = '{cnpj}'
+        ORDER BY "DT_REFER" DESC;
     """
     try:
         with engine.connect() as conn:
@@ -322,16 +318,12 @@ def get_demonstrativo_filtered(cnpj: str, dates: tuple, max_level: int,
     dates_str  = "', '".join([str(d) for d in dates])
 
     query = f"""
-    SELECT
-        "CD_CONTA",
-        "DS_CONTA",
-        "DT_REFER",
-        "VL_CONTA_TRATADO"
-    FROM {tabela}
-    WHERE "CNPJ_CIA" = '{cnpj}'
-      AND "DT_REFER" IN ('{dates_str}')
-      AND LENGTH(REPLACE("CD_CONTA", '.', '')) <= {max_digits}
-    ORDER BY "CD_CONTA", "DT_REFER";
+        SELECT "CD_CONTA", "DS_CONTA", "DT_REFER", "VL_CONTA_TRATADO"
+        FROM {tabela}
+        WHERE "CNPJ_CIA" = '{cnpj}'
+          AND "DT_REFER" IN ('{dates_str}')
+          AND LENGTH(REPLACE("CD_CONTA", '.', '')) <= {max_digits}
+        ORDER BY "CD_CONTA", "DT_REFER";
     """
     try:
         with engine.connect() as conn:
